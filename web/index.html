@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批量解压控制台</title>
+<style>
+/* ==========================================================================
+   设计语言：参考 Bandizip 的干净简洁风格
+   · 白色内容区 + 浅灰背景 + 蓝色主色（#3a7fd5）
+   · 系统字体（Segoe UI / 微软雅黑），零外部资源，离线可用
+   · 无广告、无更新提示、无装饰性元素，功能纯粹
+   ========================================================================== */
+:root {
+  --bg: #f0f2f5;
+  --surface: #ffffff;
+  --line: #d9dee5;
+  --line-strong: #c3c9d1;
+  --ink: #1f2329;
+  --muted: #5d6470;
+  --blue: #3a7fd5;
+  --blue-dark: #2d6bc0;
+  --blue-bg: #eaf2fc;
+  --ok: #1e7a48;
+  --ok-bg: #e8f5ee;
+  --err: #c4321f;
+  --err-bg: #fdecea;
+  --warn: #9a6b0f;
+  --warn-bg: #fdf5e0;
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(16,24,40,.08);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.6 "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+button { font: inherit; cursor: pointer; }
+
+/* ---------- 顶栏：标题 + 主操作 ---------- */
+.topbar {
+  background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: 0 24px; height: 52px; display: flex; align-items: center; gap: 16px;
+  position: sticky; top: 0; z-index: 10;
+}
+.topbar .logo {
+  width: 28px; height: 28px; border-radius: 6px; background: var(--blue);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 15px; flex: none;
+}
+.topbar h1 { font-size: 16px; font-weight: 600; margin: 0; }
+.topbar .status {
+  font-size: 12px; color: var(--muted); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw;
+}
+.topbar .status[data-state="running"] { color: var(--blue-dark); background: var(--blue-bg); border-color: #b8d4f2; }
+.topbar .status[data-state="done"]   { color: var(--ok); background: var(--ok-bg); border-color: #bfe3cd; }
+.topbar .status[data-state="error"]  { color: var(--err); background: var(--err-bg); border-color: #f2c1bb; }
+.topbar .spacer { flex: 1; }
+.btn-primary {
+  background: var(--blue); color: #fff; border: 1px solid var(--blue-dark);
+  border-radius: var(--radius); padding: 8px 22px; font-weight: 600;
+}
+.btn-primary:hover { background: var(--blue-dark); }
+.btn-primary:disabled { opacity: .55; cursor: default; }
+
+.wrap { max-width: 1280px; margin: 20px auto 0; padding: 0 24px 40px;
+  display: grid; grid-template-columns: minmax(360px, 420px) 1fr; gap: 20px; align-items: start; }
+@media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .counts { grid-template-columns: 1fr; } .topbar { flex-wrap: wrap; height: auto; padding: 10px 16px; } }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.card-head {
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;
+}
+.card-head .meta { font-size: 12px; font-weight: 400; color: var(--muted); }
+.card-body { padding: 16px 18px; }
+
+/* ---------- 配置表单：Bandizip 设置式分组 ---------- */
+.group-title {
+  font-size: 13px; font-weight: 600; color: var(--ink);
+  padding-bottom: 6px; margin: 18px 0 10px; border-bottom: 1px solid var(--line);
+}
+.group-title:first-child { margin-top: 0; }
+.field { display: block; margin-bottom: 12px; }
+.field .label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+input[type=text], input[type=password], textarea {
+  width: 100%; border: 1px solid var(--line-strong); border-radius: 4px;
+  padding: 7px 10px; font: 13px/1.5 Consolas, "Microsoft YaHei UI", monospace; color: var(--ink);
+  background: #fff; transition: border-color .12s;
+}
+textarea { resize: vertical; min-height: 72px; }
+input:hover, textarea:hover { border-color: var(--blue); }
+input:focus, textarea:focus { border-color: var(--blue); outline: none; box-shadow: 0 0 0 2px rgba(58,127,213,.18); }
+
+/* 模式切换：简洁单选 */
+.mode-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.mode-row label {
+  flex: 1; text-align: center; border: 1px solid var(--line-strong); border-radius: 4px;
+  padding: 7px 0; cursor: pointer; font-size: 13px; color: var(--muted); user-select: none;
+}
+.mode-row input { display: none; }
+.mode-row label:has(input:checked) { border-color: var(--blue); background: var(--blue-bg); color: var(--blue-dark); font-weight: 600; }
+
+/* 复选框行：Bandizip 设置对话框同款 */
+.check-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.check-row input { margin: 3px 0 0; accent-color: var(--blue); width: 15px; height: 15px; flex: none; }
+.check-row .t { font-size: 13px; }
+.check-row .d { font-size: 12px; color: var(--muted); }
+
+.pwd-box { position: relative; }
+.pwd-box input { padding-right: 52px; }
+.pwd-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: none; background: none; color: var(--blue); font-size: 12px; padding: 4px 6px;
+}
+.note { font-size: 12px; color: var(--muted); background: var(--bg); border-radius: 4px; padding: 8px 10px; margin-bottom: 12px; }
+.note b { color: var(--ink); }
+
+details.advanced > summary {
+  cursor: pointer; font-size: 13px; color: var(--blue-dark); user-select: none; padding: 2px 0;
+}
+details.advanced[open] > summary { margin-bottom: 10px; }
+
+.form-error { display: none; color: var(--err); font-size: 12px; margin: 8px 0; }
+.form-error.show { display: block; }
+
+.progress { height: 4px; border-radius: 2px; background: var(--bg); margin-top: 12px; overflow: hidden; }
+.progress i { display: block; height: 100%; width: 30%; background: var(--blue); border-radius: 2px;
+  animation: slide 1.1s ease-in-out infinite; opacity: 0; }
+.progress.on i { opacity: 1; }
+@keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .progress i { animation: none; width: 100%; } }
+
+/* ---------- 统计条 ---------- */
+.counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.count { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 12px 16px; display: flex; align-items: baseline; gap: 8px; }
+.count .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.count .k { font-size: 12px; color: var(--muted); }
+.count.ok .v { color: var(--ok); } .count.err .v { color: var(--err); } .count.warn .v { color: var(--warn); }
+.count .sub { font-size: 11px; color: var(--muted); margin-left: auto; text-align: right; }
+
+/* ---------- 运行提示 ---------- */
+.log { height: 200px; overflow-y: auto; font: 12px/1.7 Consolas, "Microsoft YaHei UI", monospace; }
+.log .empty { color: var(--muted); padding: 8px 0; }
+.log .line { display: flex; gap: 10px; padding: 1px 0; }
+.log .t { color: var(--muted); flex: none; }
+.log .lv { flex: none; width: 44px; }
+.log .lv.info { color: var(--blue-dark); } .log .lv.warn { color: var(--warn); } .log .lv.error { color: var(--err); }
+.log .tx { overflow-wrap: anywhere; }
+
+/* ---------- 汇总 ---------- */
+.section-title { font-size: 13px; font-weight: 600; margin: 18px 0 8px; }
+.section-title:first-child { margin-top: 0; }
+.auth-strip { font-size: 12px; background: var(--blue-bg); border-left: 3px solid var(--blue);
+  border-radius: 4px; padding: 8px 12px; margin: 8px 0; overflow-wrap: anywhere; }
+.auth-strip.bad { background: var(--err-bg); border-left-color: var(--err); }
+.vset { font-size: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+.vset.missing { color: var(--err); } .vset.ok { color: var(--muted); }
+
+.group { border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
+.group > summary {
+  list-style: none; display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; cursor: pointer; background: var(--bg); font-size: 13px; user-select: none;
+}
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary::after { content: "▾"; margin-left: auto; color: var(--muted); transition: transform .15s; }
+.group:not([open]) > summary::after { transform: rotate(-90deg); }
+.group .reason { font: 600 12px Consolas, monospace; padding: 1px 8px; border-radius: 3px; }
+.group.err .reason { color: var(--err); background: var(--err-bg); }
+.group.skip .reason { color: var(--warn); background: var(--warn-bg); }
+.group.done .reason { color: var(--ok); background: var(--ok-bg); }
+.group .num { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; }
+.group .rows { padding: 6px 14px 10px; }
+.group .row { display: flex; gap: 10px; font-size: 12px; padding: 2px 0; border-bottom: 1px dotted var(--line); }
+.group .row:last-child { border-bottom: none; }
+.group .rk { color: var(--muted); flex: none; width: 48px; }
+.group .rv { overflow-wrap: anywhere; }
+.group .rv.detail { color: var(--muted); }
+.summary-empty { color: var(--muted); font-size: 12px; padding: 14px 0; }
+.summary-empty strong { margin-right: 8px; color: var(--ink); }
+
+.actions { display: flex; gap: 8px; }
+.mini-btn { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 4px;
+  padding: 4px 12px; font-size: 12px; color: var(--ink); }
+.mini-btn:hover:not(:disabled) { border-color: var(--blue); color: var(--blue-dark); }
+.mini-btn:disabled { opacity: .5; cursor: default; }
+.raw { display: none; margin-top: 10px; }
+.raw.open { display: block; }
+.raw pre { margin: 0; max-height: 320px; overflow: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px;
+  font: 12px/1.6 Consolas, monospace; white-space: pre; }
+
+/* ---------- 底部状态栏：格式支持 + 7-Zip 状态 ---------- */
+.statusbar {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); font-size: 12px; color: var(--muted);
+}
+.foot { grid-column: 1 / -1; }
+.statusbar summary { padding: 10px 18px; cursor: pointer; user-select: none; list-style: none; display: flex; gap: 8px; align-items: center; }
+.statusbar summary::-webkit-details-marker { display: none; }
+.statusbar summary::before { content: "▸"; transition: transform .15s; color: var(--muted); }
+.statusbar[open] summary::before { transform: rotate(90deg); }
+.statusbar .body { padding: 2px 18px 14px; }
+.statusbar table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.statusbar td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.statusbar tr:last-child td { border-bottom: none; }
+.statusbar .tool-ok { color: var(--ok); } .statusbar .tool-miss { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="logo" aria-hidden="true">⤓</span>
+  <h1>批量解压控制台</h1>
+  <span class="status" id="ticket" data-state="idle">就绪</span>
+  <span class="spacer"></span>
+  <button class="btn-primary" id="runBtn">开始解压</button>
+</header>
+
+<main class="wrap">
+  <!-- ============ 左：配置（Bandizip 设置式分组） ============ -->
+  <section class="card" aria-labelledby="cfgTitle">
+    <div class="card-head"><span id="cfgTitle">解压设置</span></div>
+    <div class="card-body">
+
+      <div class="group-title">输入</div>
+      <div class="mode-row" role="radiogroup" aria-label="输入方式">
+        <label><input type="radio" name="mode" value="dir" checked>目录扫描</label>
+        <label><input type="radio" name="mode" value="files">多个文件</label>
+      </div>
+      <label class="field" id="dirField">
+        <span class="label"><span>输入目录</span><span>递归扫描其中的压缩包</span></span>
+        <input type="text" id="inputDir" placeholder="D:\packs" spellcheck="false">
+      </label>
+      <label class="field" id="filesField" hidden>
+        <span class="label"><span>压缩包路径</span><span>一行一个，分卷只需填首卷</span></span>
+        <textarea id="archives" placeholder="D:\packs\a.zip&#10;D:\packs\7z.001" spellcheck="false"></textarea>
+      </label>
+      <label class="field">
+        <span class="label"><span>输出目录</span><span>必填</span></span>
+        <input type="text" id="outputDir" placeholder="D:\out" spellcheck="false">
+      </label>
+
+      <div class="group-title">选项</div>
+      <label class="check-row"><input type="checkbox" id="overwrite">
+        <span><span class="t">覆盖已存在文件</span><br><span class="d">默认关闭：同名条目跳过并记为 conflict</span></span></label>
+      <label class="check-row"><input type="checkbox" id="useArchiveSubdir" checked>
+        <span><span class="t">按包名建子目录</span><br><span class="d">输出目录/&lt;包名&gt;/&lt;包内原始相对路径&gt;</span></span></label>
+
+      <div class="group-title">密码</div>
+      <label class="field">
+        <span class="label"><span>解压密码</span><span>未加密可留空</span></span>
+        <span class="pwd-box">
+          <input type="password" id="password" placeholder="留空则不使用密码" autocomplete="new-password" spellcheck="false">
+          <button type="button" class="pwd-toggle" id="togglePwd" aria-label="显示密码">显示</button>
+        </span>
+      </label>
+      <div class="note"><b>密码仅本次任务使用</b>，不写入日志与本地存储。批次内不同包用不同密码时，在下方「高级」里全部列上，程序对每个包按顺序自动尝试。</div>
+
+      <details class="advanced">
+        <summary>高级：7-Zip 路径 / 候选密码 / 密码本</summary>
+        <div style="padding-top:10px">
+          <label class="field">
+            <span class="label"><span>7z.exe 路径</span><span>留空自动探测</span></span>
+            <input type="text" id="externalTool" placeholder="C:\Program Files\7-Zip\7z.exe" spellcheck="false">
+          </label>
+          <label class="field">
+            <span class="label"><span>候选密码</span><span>一行一个 · 按顺序尝试</span></span>
+            <textarea id="passwords" placeholder="PWD_A&#10;PWD_B" spellcheck="false"></textarea>
+          </label>
+          <label class="field" style="margin-bottom:4px">
+            <span class="label"><span>密码本文件</span><span>UTF-8 · 一行一个</span></span>
+            <input type="text" id="passwordFile" placeholder="D:\secret\passwords.txt" spellcheck="false">
+          </label>
+        </div>
+      </details>
+
+      <div class="form-error" id="formError" role="alert"></div>
+      <div class="progress" id="progress"><i></i></div>
+    </div>
+  </section>
+
+  <!-- ============ 右：统计 / 提示 / 汇总 ============ -->
+  <div>
+    <div class="counts" aria-label="结果统计">
+      <div class="count ok"><span class="v" id="cOk">–</span><span class="k">成功</span>
+        <span class="sub">完整 <b id="aOk">0</b> 包</span></div>
+      <div class="count err"><span class="v" id="cErr">–</span><span class="k">失败</span>
+        <span class="sub">部分 <b id="aPartial">0</b> · 整包 <b id="aFailed">0</b></span></div>
+      <div class="count warn"><span class="v" id="cSkip">–</span><span class="k">跳过</span>
+        <span class="sub">冲突 <b id="reasonCount">0</b> 组</span></div>
+    </div>
+
+    <section class="card" aria-labelledby="logTitle">
+      <div class="card-head"><span id="logTitle">运行提示</span><span class="meta" id="logMeta">0 条</span></div>
+      <div class="card-body">
+        <div class="log" id="log" role="log" aria-live="polite">
+          <div class="empty">尚未启动任务。填好输入与输出目录后点击「开始解压」。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:20px" aria-labelledby="sumTitle">
+      <div class="card-head">
+        <span id="sumTitle">解压结果</span>
+        <span class="actions">
+          <button class="mini-btn" id="copyBtn" disabled>复制 JSON</button>
+          <button class="mini-btn" id="downBtn" disabled>下载汇总</button>
+          <button class="mini-btn" id="rawBtn" disabled>原始 JSON</button>
+        </span>
+      </div>
+      <div class="card-body">
+        <div id="summary">
+          <div class="summary-empty"><strong>暂无数据</strong>运行结束后在此按原因码展示失败与跳过明细。</div>
+        </div>
+        <div class="raw" id="raw"><pre id="rawPre"></pre></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ 底部：格式支持与外部工具状态 ============ -->
+  <footer class="foot">
+    <details class="statusbar">
+      <summary>支持的格式与工具状态 <span class="meta" id="toolState" style="color:inherit">检测中…</span></summary>
+      <div class="body">
+        <table id="formatTable"><tbody><tr><td>读取中…</td><td></td></tr></tbody></table>
+      </div>
+    </details>
+  </footer>
+</main>
+
+<script>
+/* ==========================================================================
+   页面 <-> 程序 参数与返回约定（与 batch_extract.py 一致）
+   POST /api/jobs  请求体：
+     { mode:"dir|files", inputDir:string, archives:string[], outputDir:string,
+       overwrite:boolean, useArchiveSubdir:boolean, externalTool:string,
+       password:string, passwords:string[], passwordFile:string }
+     响应 202 {jobId}；仅非法 JSON / 字段类型错误返回 400。
+   GET /api/jobs/<jobId> -> {status, messages[], summary, error}
+   汇总 schema batch-extract-summary/v1：
+     counts / archiveCounts / groups / items / volumeSets / auth / messages
+   分卷约定：7z.001 / xxx.7z.001 / xxx.part1.rar 按「同目录 + 同组名」自动归组，
+     只把首卷交给 7-Zip；缺首卷或断号 -> missing_volume，整组跳过。
+   密码安全约定：password / passwords / passwordFile 三字段只在任务内存，
+     用完清空；不写入汇总 / messages / 日志 / localStorage，接口从不回显；
+     汇总 auth:{provided,candidates,attempted,solved} 只给数量，绝不回显明文。
+   ========================================================================== */
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const POLL_MS = 350;
+  let lastSummary = null;
+  let renderedMessages = 0;
+  let pollTimer = null;
+  let running = false;
+
+  const esc = (v) => String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+  function mode() { return document.querySelector('input[name="mode"]:checked').value; }
+
+  function syncMode() {
+    const dir = mode() === "dir";
+    $("dirField").hidden = !dir;
+    $("filesField").hidden = dir;
+  }
+  document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", syncMode));
+
+  function setStatus(state, text) {
+    const el = $("ticket");
+    el.dataset.state = state;
+    el.textContent = text;
+    el.title = text;
+  }
+
+  function setFormError(msg) {
+    const el = $("formError");
+    el.textContent = msg;
+    el.classList.toggle("show", Boolean(msg));
+  }
+
+  function appendLog(msgs) {
+    const log = $("log");
+    if (renderedMessages === 0) log.innerHTML = "";
+    for (let i = renderedMessages; i < msgs.length; i++) {
+      const m = msgs[i] || {};
+      const line = document.createElement("div");
+      line.className = "line";
+      const at = (m.at || "").slice(11, 19);
+      line.innerHTML = '<span class="t">' + esc(at) + '</span>' +
+        '<span class="lv ' + esc(m.level || "info") + '">' + esc(m.level || "info") + '</span>' +
+        '<span class="tx">' + esc(m.text || "") + '</span>';
+      log.appendChild(line);
+    }
+    renderedMessages = msgs.length;
+    $("logMeta").textContent = msgs.length + " 条";
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function resetResult() {
+    lastSummary = null;
+    renderedMessages = 0;
+    $("log").innerHTML = '<div class="empty">任务已提交，正在等待后台处理…</div>';
+    $("logMeta").textContent = "0 条";
+    $("cOk").textContent = $("cErr").textContent = $("cSkip").textContent = "–";
+    $("aOk").textContent = $("aPartial").textContent = $("aFailed").textContent = "0";
+    $("reasonCount").textContent = "0";
+    $("summary").innerHTML = '<div class="summary-empty"><strong>处理中</strong>正在逐一解压，完成后按原因码归类展示。</div>';
+    ["copyBtn", "downBtn", "rawBtn"].forEach((id) => $(id).disabled = true);
+    $("raw").classList.remove("open");
+    $("rawPre").textContent = "";
+  }
+
+  function row(k, v, cls) {
+    return '<div class="row"><span class="rk">' + esc(k) + '</span>' +
+      '<span class="rv ' + (cls || "") + '">' + esc(v) + '</span></div>';
+  }
+
+  function groupHtml(g, kind) {
+    const items = (g.items || []).map((it) =>
+      row("压缩包", it.archive) + row("路径", it.path) + row("说明", it.detail, "detail")).join("");
+    return '<details class="group ' + kind + '" open>' +
+      '<summary><span class="reason">' + esc(g.reason) + '</span>' +
+      '<span>' + esc(g.label) + '</span>' +
+      '<span class="num">' + esc(g.count) + '</span></summary>' +
+      '<div class="rows">' + (items || row("—", "无明细")) + '</div></details>';
+  }
+
+  function renderSummary(s) {
+    const c = s.counts || {}, a = s.archiveCounts || {};
+    $("cOk").textContent = c.success != null ? c.success : "–";
+    $("cErr").textContent = c.failed != null ? c.failed : "–";
+    $("cSkip").textContent = c.skipped != null ? c.skipped : "–";
+    $("aOk").textContent = a.ok || 0;
+    $("aPartial").textContent = a.partial || 0;
+    $("aFailed").textContent = a.failed || 0;
+
+    const failed = s.groups && s.groups.failed ? s.groups.failed : [];
+    const skipped = s.groups && s.groups.skipped ? s.groups.skipped : [];
+    const successItems = (s.items || []).filter((i) => i.status === "success");
+    $("reasonCount").textContent = skipped.length;
+
+    let html = '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">' +
+      '输出目录：' + esc(s.outputDir) + ' · ' + esc(s.startedAt) + ' → ' + esc(s.finishedAt) + '</div>';
+
+    // 密码摘要：只显示数量与原因码，任何情况下不渲染明文
+    const auth = s.auth;
+    if (auth) {
+      const pwGroups = failed.filter((g) => g.reason === "password_required" || g.reason === "wrong_password");
+      html += '<div class="auth-strip">密码：' +
+        (auth.provided ? '已提供 ' + esc(auth.candidates) + ' 个候选' : '未提供') +
+        ' · 需要认证 ' + esc(auth.attempted) + ' 包 · 靠密码成功 ' + esc(auth.solved) + ' 包</div>';
+      if (pwGroups.length) {
+        html += '<div class="auth-strip bad">密码问题：' +
+          pwGroups.map((g) => esc(g.reason) + ' × ' + esc(g.count)).join(' · ') +
+          ' → 请在左侧填写正确密码后重新运行；这些包不会产生半成品文件，其余包已照常处理。</div>';
+      }
+    }
+
+    const vsets = s.volumeSets || [];
+    if (vsets.length) {
+      html += '<div class="section-title">分卷组（' + vsets.length + ' 组）</div>';
+      html += vsets.map((v) => {
+        const first = String(v.first || "").split(/[\\/]/).pop();
+        const last = String(v.last || "").split(/[\\/]/).pop();
+        const missing = v.missing || [];
+        const cls = missing.length ? "missing" : "ok";
+        const note = missing.length
+          ? ' · 缺卷编号 ' + esc(missing.join(", ")) + '，整组跳过'
+          : ' · 已按首卷合并解压';
+        return '<div class="vset ' + cls + '">' + esc(v.name) + ' · ' + esc(first) +
+          ' → ' + esc(last) + ' · ' + esc(v.count) + ' 卷' + note + '</div>';
+      }).join("");
+    }
+
+    html += '<div class="section-title">失败明细</div>';
+    html += failed.length ? failed.map((g) => groupHtml(g, "err")).join("")
+      : '<div class="summary-empty">无失败项</div>';
+    html += '<div class="section-title">跳过明细</div>';
+    html += skipped.length ? skipped.map((g) => groupHtml(g, "skip")).join("")
+      : '<div class="summary-empty">无跳过项</div>';
+    html += '<div class="section-title">成功明细</div>';
+    html += groupHtml({
+      reason: "success",
+      label: "成功落盘的文件",
+      count: successItems.length,
+      items: successItems.map((i) => ({ archive: i.archive, path: i.path, detail: "已写入" }))
+    }, "done");
+    $("summary").innerHTML = html;
+
+    $("rawPre").textContent = JSON.stringify(s, null, 2);
+    ["copyBtn", "downBtn", "rawBtn"].forEach((id) => $(id).disabled = false);
+  }
+
+  function buildPayload() {
+    return {
+      mode: mode(),
+      inputDir: $("inputDir").value.trim(),
+      archives: $("archives").value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean),
+      outputDir: $("outputDir").value.trim(),
+      overwrite: $("overwrite").checked,
+      useArchiveSubdir: $("useArchiveSubdir").checked,
+      externalTool: $("externalTool").value.trim(),
+      // 密码不做 trim：首尾空格可能是密码的一部分；候选密码按行读取并逐行 trim
+      password: $("password").value,
+      passwords: $("passwords").value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean),
+      passwordFile: $("passwordFile").value.trim()
+    };
+  }
+
+  function validate(p) {
+    if (!p.outputDir) return "输出目录为必填项。";
+    if (p.mode === "dir" && !p.inputDir) return "目录模式下必须填写输入目录。";
+    if (p.mode === "files" && p.archives.length === 0) return "多文件模式下至少填写一个压缩包路径。";
+    return "";
+  }
+
+  function setRunning(on) {
+    running = on;
+    $("runBtn").disabled = on;
+    $("runBtn").textContent = on ? "处理中…" : "开始解压";
+    $("progress").classList.toggle("on", on);
+  }
+
+  async function start() {
+    const payload = buildPayload();
+    const err = validate(payload);
+    setFormError(err);
+    if (err) return;
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    resetResult();
+    setRunning(true);
+    setStatus("running", "正在处理…");
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.jobId) throw new Error(data.error || ("HTTP " + res.status));
+      setStatus("running", "处理中 · 任务 " + data.jobId);
+      poll(data.jobId);
+    } catch (e) {
+      setRunning(false);
+      setStatus("error", "提交失败");
+      setFormError("任务提交失败：" + e.message + "。请确认服务已启动。");
+      $("log").innerHTML = '<div class="empty">提交失败，未产生运行提示。</div>';
+    }
+  }
+
+  async function poll(jobId) {
+    try {
+      const res = await fetch("/api/jobs/" + encodeURIComponent(jobId), { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      appendLog(data.messages || []);
+      if (data.status === "running") {
+        pollTimer = setTimeout(() => poll(jobId), POLL_MS);
+        return;
+      }
+      setRunning(false);
+      if (data.status === "error") {
+        setStatus("error", "服务异常");
+        $("summary").innerHTML = '<div class="summary-empty"><strong>错误</strong>' +
+          esc(data.error || "未知错误") + '</div>';
+        return;
+      }
+      lastSummary = data.summary;
+      if (lastSummary) renderSummary(lastSummary);
+      const c = (lastSummary && lastSummary.counts) || {};
+      setStatus("done", "已完成 · 成功 " + (c.success || 0) + " · 失败 " + (c.failed || 0) + " · 跳过 " + (c.skipped || 0));
+    } catch (e) {
+      setRunning(false);
+      setStatus("error", "轮询失败");
+      setFormError("获取任务状态失败：" + e.message);
+    }
+  }
+
+  // 密码显示切换：只在 DOM 内改 type，不复制、不打印、不持久化明文
+  $("togglePwd").addEventListener("click", () => {
+    const el = $("password");
+    const show = el.type === "password";
+    el.type = show ? "text" : "password";
+    $("togglePwd").textContent = show ? "隐藏" : "显示";
+    $("togglePwd").setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
+    if (show) el.focus();
+  });
+
+  $("runBtn").addEventListener("click", start);
+  $("outputDir").addEventListener("keydown", (e) => { if (e.key === "Enter" && !running) start(); });
+  $("password").addEventListener("keydown", (e) => { if (e.key === "Enter" && !running) start(); });
+
+  $("rawBtn").addEventListener("click", () => $("raw").classList.toggle("open"));
+  $("copyBtn").addEventListener("click", async () => {
+    if (!lastSummary) return;
+    const text = JSON.stringify(lastSummary, null, 2);
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); ta.remove();
+    }
+    const b = $("copyBtn"), old = b.textContent;
+    b.textContent = "已复制 ✓"; setTimeout(() => b.textContent = old, 1400);
+  });
+  $("downBtn").addEventListener("click", () => {
+    if (!lastSummary) return;
+    const blob = new Blob([JSON.stringify(lastSummary, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "batch-extract-summary-" + Date.now() + ".json";
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // 拉取格式支持 / 外部工具状态 / 默认输出目录；接口不可用则给出明确空态
+  fetch("/api/meta", { cache: "no-store" }).then((r) => r.json()).then((m) => {
+    $("formatTable").innerHTML = (m.formats || []).map((f) =>
+      "<tr><td style='width:40%'>" + esc(f.ext) + "</td><td>" + esc(f.via) + "</td></tr>").join("");
+    const st = $("toolState");
+    if (m.externalTool) {
+      st.textContent = "7-Zip 已就绪，加密包 / 分卷可解压";
+      st.className = "tool-ok";
+    } else {
+      st.textContent = "未检测到 7-Zip（.7z / .rar / 分卷不可用，可在高级设置中指定路径）";
+      st.className = "tool-miss";
+    }
+    if (m.outputDirDefault && !$("outputDir").value) $("outputDir").value = m.outputDirDefault;
+  }).catch(() => {
+    $("formatTable").innerHTML = "<tr><td>接口未就绪</td><td>请重新启动程序</td></tr>";
+    $("toolState").textContent = "无法连接服务";
+  });
+
+  syncMode();
+})();
+</script>
+</body>
+</html>
